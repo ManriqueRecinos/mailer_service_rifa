@@ -64,6 +64,17 @@ function authMiddleware(req, res, next) {
   return next();
 }
 
+app.get('/', (_req, res) => {
+  res.json({
+    name: 'rifas-mailer',
+    status: 'ok',
+    endpoints: {
+      health: 'GET /health',
+      send: 'POST /send',
+    },
+  });
+});
+
 app.get('/health', (_req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
 
 app.post('/send', authMiddleware, async (req, res) => {
