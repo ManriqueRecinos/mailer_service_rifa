@@ -8,6 +8,50 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: process.env.MAILER_BODY_LIMIT || '20mb' }));
 
+async function sendWithResend(mailOptions) {
+  const apiKey = requireEnv('RESEND_API_KEY');
+
+  const payload = {
+    from: mailOptions.from,
+    to: (mailOptions.to || '')
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean),
+    subject: mailOptions.subject,
+    html: mailOptions.html,
+  };
+
+  if (Array.isArray(mailOptions.attachments) && mailOptions.attachments.length > 0) {
+    payload.attachments = mailOptions.attachments.map((att) => ({
+      filename: att.filename,
+      content: Buffer.isBuffer(att.content) ? att.content.toString('base64') : att.content,
+      content_type: att.contentType,
+    }));
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const msg = data && (data.message || data.error)
+      ? (data.message || data.error)
+      : `Resend error (${response.status})`;
+    const e = new Error(msg);
+    e.statusCode = 502;
+    throw e;
+  }
+
+  return { messageId: data.id || data?.data?.id };
+}
+
 function parseBool(value) {
   if (typeof value !== 'string') return undefined;
   const v = value.trim().toLowerCase();
@@ -48,6 +92,16 @@ function getTransporter() {
   });
 
   return cachedTransporter;
+}
+
+async function sendEmail(mailOptions) {
+  const transport = (process.env.MAILER_TRANSPORT || 'smtp').trim().toLowerCase();
+  if (transport === 'resend') {
+    return sendWithResend(mailOptions);
+  }
+
+  const transporter = getTransporter();
+  return transporter.sendMail(mailOptions);
 }
 
 function authMiddleware(req, res, next) {
@@ -94,11 +148,23 @@ app.post('/send', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Invalid "to"' });
     }
 
+    const resolvedFrom =
+      from ||
+      process.env.MAILER_FROM ||
+      process.env.SMTP_FROM ||
+      (process.env.SMTP_USER ? `"Rifas Premium" <${process.env.SMTP_USER}>` : undefined);
+
+    if (!resolvedFrom) {
+      return res.status(500).json({
+        error: 'Missing "from". Provide "from" in request or set MAILER_FROM / SMTP_FROM (or SMTP_USER for default).',
+      });
+    }
+
     const maxAttachmentBytes = parseInt(process.env.MAILER_MAX_ATTACHMENT_BYTES || '0', 10);
     let attachmentBytes = 0;
 
     const mailOptions = {
-      from: from || process.env.SMTP_FROM || `"Rifas Premium" <${process.env.SMTP_USER}>`,
+      from: resolvedFrom,
       to: toList.join(', '),
       subject,
       html,
@@ -130,11 +196,17 @@ app.post('/send', authMiddleware, async (req, res) => {
       });
     }
 
-    const transporter = getTransporter();
-    const result = await transporter.sendMail(mailOptions);
+    const result = await sendEmail(mailOptions);
 
     return res.status(200).json({ success: true, messageId: result.messageId });
   } catch (err) {
+    if (
+      err &&
+      (err.code === 'ETIMEDOUT' || err.code === 'ECONNREFUSED') &&
+      err.command === 'CONN'
+    ) {
+      err.message = `${err.message} (SMTP connection failed. On Render free tier, outbound SMTP ports 25/465/587 are blocked. Use a paid instance or set MAILER_TRANSPORT=resend.)`;
+    }
     console.error('[Mailer] Error:', err);
     const status = typeof err.statusCode === 'number' ? err.statusCode : 500;
     return res.status(status).json({ error: err.message || 'Mailer error' });
