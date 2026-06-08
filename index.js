@@ -10,9 +10,12 @@ app.use(express.json({ limit: process.env.MAILER_BODY_LIMIT || '20mb' }));
 
 async function sendWithResend(mailOptions) {
   const apiKey = requireEnv('RESEND_API_KEY');
+  
+  // Use configured Resend from email or fallback to mailOptions.from
+  const fromEmail = process.env.RESEND_FROM_EMAIL || mailOptions.from;
 
   const payload = {
-    from: mailOptions.from,
+    from: fromEmail,
     to: (mailOptions.to || '')
       .split(',')
       .map((v) => v.trim())
@@ -200,7 +203,8 @@ async function sendWithSendGrid(mailOptions) {
 }
 
 async function sendEmail(mailOptions) {
-  const priorityStr = process.env.MAILER_PROVIDERS_PRIORITY || 'gmail,resend,sendgrid';
+  // Gmail only configuration
+  const priorityStr = process.env.MAILER_PROVIDERS_PRIORITY || 'gmail';
   const providers = priorityStr
     .split(',')
     .map((p) => p.trim().toLowerCase())
