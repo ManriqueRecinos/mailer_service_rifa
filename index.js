@@ -203,8 +203,8 @@ async function sendWithSendGrid(mailOptions) {
 }
 
 async function sendEmail(mailOptions) {
-  // Gmail only configuration
-  const priorityStr = process.env.MAILER_PROVIDERS_PRIORITY || 'gmail';
+  // Use Resend for Render free tier, Gmail for paid plans
+  const priorityStr = process.env.MAILER_PROVIDERS_PRIORITY || 'resend,gmail';
   const providers = priorityStr
     .split(',')
     .map((p) => p.trim().toLowerCase())
